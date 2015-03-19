@@ -198,6 +198,9 @@ def authenticate(client, login_user, login_password):
     if (not skip_auth and login_user and login_password):
         client.admin.authenticate(login_user, login_password)
 
+def rs_is_master(client):
+    return client.local.command('isMaster')
+
 def rs_get_config(client):
     return client.local.system.replset.find_one()
 
@@ -306,17 +309,10 @@ def main():
     except ConnectionFailure as e:
         module.fail_json(msg='unable to connect to database: %s' % e)
 
-    # authenticate
-    if login_user and login_password:
-        authenticate(client, login_user, login_password)
-
-    # get replica set config
-    rs_config = rs_get_config(client)
-    member['_id'] = rs_get_next_member_id(rs_config)
-
     if state == 'initiated':
-        # initiate only if config is empty
-        if rs_config is None:
+        # initiate only if not configured yet
+        is_master = rs_is_master(client)
+        if 'setName' not in is_master:
             if member_host is None:
                 rs_initiate(client)
             else:
@@ -326,24 +322,34 @@ def main():
                     "_id": replset,
                     "members": [member]
                 }
+                rs_config['members'][0]['_id'] = 0
                 rs_initiate(client, rs_config)
             rs_wait_for_ok_and_primary(client)
             result['changed'] = True
-    elif state == 'present':
-        # check if given host is currently a member of replica set
-        current_member = rs_get_member(rs_config, member['host'])
-        if current_member is None:
-            rs_config = rs_add_member(rs_config, member)
-            rs_reconfigure(client, rs_config)
-            result['changed'] = True
+    else:
+        # authenticate
+        if login_user and login_password:
+            authenticate(client, login_user, login_password)
 
-    elif state == 'absent':
-        # check if given host is currently a member of replica set
-        current_member = rs_get_member(rs_config, member['host'])
-        if current_member:
-            rs_config = rs_remove_member(rs_config, member)
-            rs_reconfigure(client, rs_config)
-            result['changed'] = True
+        # get replica set config
+        rs_config = rs_get_config(client)
+        member['_id'] = rs_get_next_member_id(rs_config)
+
+        if state == 'present':
+            # check if given host is currently a member of replica set
+            current_member = rs_get_member(rs_config, member['host'])
+            if current_member is None:
+                rs_config = rs_add_member(rs_config, member)
+                rs_reconfigure(client, rs_config)
+                result['changed'] = True
+
+        elif state == 'absent':
+            # check if given host is currently a member of replica set
+            current_member = rs_get_member(rs_config, member['host'])
+            if current_member:
+                rs_config = rs_remove_member(rs_config, member)
+                rs_reconfigure(client, rs_config)
+                result['changed'] = True
 
     module.exit_json(**result)
 
