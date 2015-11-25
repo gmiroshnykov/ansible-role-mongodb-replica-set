@@ -309,6 +309,10 @@ def main():
     except ConnectionFailure as e:
         module.fail_json(msg='unable to connect to database: %s' % e)
 
+    # authenticate
+    if login_user and login_password:
+        authenticate(client, login_user, login_password)
+
     if state == 'initiated':
         # initiate only if not configured yet
         is_master = rs_is_master(client)
@@ -327,10 +331,6 @@ def main():
             rs_wait_for_ok_and_primary(client)
             result['changed'] = True
     else:
-        # authenticate
-        if login_user and login_password:
-            authenticate(client, login_user, login_password)
-
         # get replica set config
         rs_config = rs_get_config(client)
         member['_id'] = rs_get_next_member_id(rs_config)
