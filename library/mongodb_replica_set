@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 # (c) 2014, George Miroshnykov <george.miroshnykov@gmail.com>
+# (c) 2014, Olivier Perbellini <olivier.perbellini@gmail.com>
 #
 # This file is part of Ansible
 #
@@ -22,9 +23,9 @@ DOCUMENTATION = '''
 ---
 module: mongodb_replica_set
 version_added: "1.5"
-short_description: Initiate, add and remove members from MongoDB replica set
+short_description: Initiate, configure, add and remove members from MongoDB replica set
 description:
-   - 'Initiate, add and remove members from MongoDB replica set.
+   - 'Initiate, configure, add and remove members from MongoDB replica set.
      See: http://docs.mongodb.org/manual/reference/replica-configuration/'
 options:
     login_user:
@@ -104,12 +105,46 @@ options:
               but it is highly recommended each member has 1 or 0 votes.
         required: false
         default: 1
+    chainingAllowed:
+        description:
+            - When chainingAllowed is true, the replica set allows secondary
+              members to replicate from other secondary members.
+              When chainingAllowed is false, secondaries can replicate only
+              from the primary.
+        required: false
+        default: true
+    woption:
+        description:
+            - Provides the ability to disable write concern entirely as well as
+              specify the write concern for replica sets.
+        required: false
+        default: 1
+    joption:
+        description:
+            - Confirms that the mongod instance has written the data to the
+              on-disk journal. This ensures that data is not lost if the mongod
+              instance shuts down unexpectedly. Set to true to enable.
+        required: false
+        default: false
+    wtimeout:
+        description:
+            - This option specifies a time limit, in milliseconds, for the write
+            concern. wtimeout is only applicable for woption values greater than 1.
+        required: false
+        default: 0
+    heartbeat:
+        description:
+            - Number of seconds that the replica set members wait for a successful
+              heartbeat from each other. If a member does not respond in time,
+              other members mark the delinquent member as inaccessible.
+        required: false
+        default: 10
     state:
         description:
             - The desired state of the replica set
         required: true
         default: null
-        choices: [ "initiated", "present", "absent" ]
+        choices: [ "initiated", "reconf" "present", "absent" ]
 notes:
     - See also M(mongodb_user)
 requirements: [ pymongo ]
@@ -119,6 +154,9 @@ author: George Miroshnykov <george.miroshnykov@gmail.com>
 EXAMPLES = '''
 # initiate a replica set
 - mongodb_replica_set: state=initiated
+
+# Reconfigure the settings of a replica set
+- mongodb_replica_set: state=reconf woption:2 wtimeout:100 joption:true
 
 # add a replica set member
 - mongodb_replica_set: member=secondary.example.com state=present
@@ -187,6 +225,42 @@ def create_member(host, **kwargs):
 
     return member
 
+def create_settings(**kwargs):
+    settings = {}
+    getLastErrorDefaults = {}
+
+    if kwargs['chainingAllowed']:
+        settings['chainingAllowed'] = kwargs['chainingAllowed']
+    else:
+        settings['chainingAllowed'] = True
+
+    if kwargs['heartbeat']:
+        settings['heartbeat'] = kwargs['heartbeat']
+    else:
+        settings['heartbeat'] = 10
+
+    if kwargs['woption']:
+        try:
+            getLastErrorDefaults['w'] = int(kwargs['woption'])
+        except ValueError:
+            getLastErrorDefaults['w'] = kwargs['woption']
+    else:
+        getLastErrorDefaults['w'] = 1
+
+    if kwargs['joption']:
+        getLastErrorDefaults['j'] = kwargs['joption']
+    else:
+        getLastErrorDefaults['w'] = False
+
+    if kwargs['wtimeout']:
+        getLastErrorDefaults['wtimeout'] = kwargs['wtimeout']
+    else:
+        getLastErrorDefaults['wtimeout'] = 0
+
+    settings['getLastErrorDefaults'] = getLastErrorDefaults
+
+    return settings
+
 def authenticate(client, login_user, login_password):
     # check if we should skip auth
     skip_auth = True
@@ -228,6 +302,11 @@ def rs_get_next_member_id(rs_config):
 def rs_add_member(rs_config, member):
     rs_config['members'].append(member)
     rs_config['version'] = rs_config['version'] + 1
+    return rs_config
+
+def rs_update_settings(rs_config, settings):
+    rs_config['version'] = rs_config['version'] + 1
+    rs_config['settings'] = settings
     return rs_config
 
 def rs_remove_member(rs_config, member):
@@ -272,7 +351,12 @@ def main():
             priority        = dict(default='1.0'),
             slave_delay     = dict(type='int', default='0'),
             votes           = dict(type='int', default='1'),
-            state           = dict(required=True, choices=['initiated', 'present', 'absent']),
+            chainingAllowed = dict(type='bool', choices=BOOLEANS, default='true'),
+            woption         = dict(default='1'),
+            joption         = dict(type='bool', choices=BOOLEANS, default='false'),
+            wtimeout        = dict(type='int', default='0'),
+            heartbeat       = dict(type='int', default='10'),
+            state           = dict(required=True, choices=['initiated', 'reconf', 'present', 'absent']),
         )
     )
 
@@ -286,6 +370,11 @@ def main():
     replset         = module.params['replset']
     member_host     = module.params['member']
     state           = module.params['state']
+    chainingAllowed = module.params['chainingAllowed']
+    woption         = module.params['woption']
+    joption         = module.params['joption']
+    wtimeout        = module.params['wtimeout']
+    heartbeat       = module.params['heartbeat']
 
     if member_host is not None:
         member_host = normalize_member_host(member_host)
@@ -309,6 +398,10 @@ def main():
     except ConnectionFailure as e:
         module.fail_json(msg='unable to connect to database: %s' % e)
 
+    # authenticate
+    if login_user and login_password:
+        authenticate(client, login_user, login_password)
+
     if state == 'initiated':
         # initiate only if not configured yet
         is_master = rs_is_master(client)
@@ -326,11 +419,19 @@ def main():
                 rs_initiate(client, rs_config)
             rs_wait_for_ok_and_primary(client)
             result['changed'] = True
+    elif state == 'reconf':
+        settings = create_settings(
+            chainingAllowed = module.params['chainingAllowed'],
+            woption         = module.params['woption'],
+            joption         = module.params['joption'],
+            wtimeout        = module.params['wtimeout'],
+            heartbeat       = module.params['heartbeat']
+        )
+        rs_config = rs_get_config(client)
+        rs_config = rs_update_settings(rs_config, settings)
+        rs_reconfigure(client, rs_config)
+        result['changed'] = True
     else:
-        # authenticate
-        if login_user and login_password:
-            authenticate(client, login_user, login_password)
-
         # get replica set config
         rs_config = rs_get_config(client)
         member['_id'] = rs_get_next_member_id(rs_config)
@@ -352,8 +453,6 @@ def main():
                 result['changed'] = True
 
     module.exit_json(**result)
-
-
 
 from ansible.module_utils.basic import *
 main()
