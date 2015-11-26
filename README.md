@@ -11,6 +11,9 @@ Usage
 # initiate a replica set
 - mongodb_replica_set: state=initiated
 
+# Reconfigure the settings of a replica set
+- mongodb_replica_set: state=reconf woption:2 wtimeout:100 joption:true
+
 # add a replica set member
 - mongodb_replica_set: member=secondary.example.com state=present
 
@@ -32,3 +35,14 @@ Usage
     slave_delay=3600
     votes=42
 ```
+
+How to use it?
+-----
+
+Copy the *library/mongodb_replica_set* python script to your ansible playbook library folder. Then you can use it in your roles.
+
+Dependencies
+-----
+
++ python-pip
++ pymongo
