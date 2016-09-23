@@ -104,6 +104,11 @@ options:
               but it is highly recommended each member has 1 or 0 votes.
         required: false
         default: 1
+    tags:
+        description:
+            - A dictionary of tags to assign to the replicaset member.
+        required: false
+        default: empty dictionary
     state:
         description:
             - The desired state of the replica set
@@ -125,6 +130,13 @@ EXAMPLES = '''
 
 # add an arbiter on custom port
 - mongodb_replica_set: member=arbiter.example.com:30000 arbiter_only=yes state=present
+
+# add tags to the replicate set member
+- mongodb_replica_set:
+    member secondary.example.com
+    state: present
+    tags:
+        use: worker
 
 # remove a replica set member
 - mongodb_replica_set: member=secondary.example.com state=absent
@@ -165,7 +177,7 @@ def normalize_member_host(member_host):
     return member_host
 
 def create_member(host, **kwargs):
-    member = dict(host = host)
+    member = dict(host = host, tags = kwargs['tags'])
 
     if kwargs['arbiter_only']:
         member['arbiterOnly'] = True
@@ -273,6 +285,7 @@ def main():
             slave_delay     = dict(type='int', default='0'),
             votes           = dict(type='int', default='1'),
             state           = dict(required=True, choices=['initiated', 'present', 'absent']),
+            tags            = dict(required=False, type='dict', default={}),
         )
     )
 
@@ -297,7 +310,8 @@ def main():
         hidden          = module.params['hidden'],
         priority        = float(module.params['priority']),
         slave_delay     = module.params['slave_delay'],
-        votes           = module.params['votes']
+        votes           = module.params['votes'],
+        tags            = module.params['tags'],
     )
 
     result = dict(changed=False)
