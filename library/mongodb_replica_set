@@ -111,10 +111,12 @@ options:
         default: empty dictionary
     state:
         description:
-            - The desired state of the replica set
+            - The desired state of the replica set. "reconfigured" state means
+              the configuration of the replica set member will be overritten
+              with the new values.
         required: true
         default: null
-        choices: [ "initiated", "present", "absent" ]
+        choices: [ "initiated", "present", "absent", "reconfigured" ]
 notes:
     - See also M(mongodb_user)
 requirements: [ pymongo ]
@@ -137,6 +139,9 @@ EXAMPLES = '''
     state: present
     tags:
         use: worker
+
+# reconfigure a replica set member
+- mongodb_replica_set: member=secondary.example.com state=reconfigured priority=0
 
 # remove a replica set member
 - mongodb_replica_set: member=secondary.example.com state=absent
@@ -251,6 +256,15 @@ def rs_remove_member(rs_config, member):
     rs_config['version'] = rs_config['version'] + 1
     return rs_config
 
+def rs_replace_member(rs_config, member):
+    for i, candidate in enumerate(rs_config['members']):
+        if candidate['host'] == member['host']:
+            rs_config['members'][i] = member
+            break
+    rs_config['version'] = rs_config['version'] + 1
+    return rs_config
+
+
 def rs_reconfigure(client, rs_config):
     try:
         client.admin.command('replSetReconfig', rs_config)
@@ -284,7 +298,7 @@ def main():
             priority        = dict(default='1.0'),
             slave_delay     = dict(type='int', default='0'),
             votes           = dict(type='int', default='1'),
-            state           = dict(required=True, choices=['initiated', 'present', 'absent']),
+            state           = dict(required=True, choices=['initiated', 'present', 'absent', 'reconfigured']),
             tags            = dict(required=False, type='dict', default={}),
         )
     )
@@ -314,7 +328,7 @@ def main():
         tags            = module.params['tags'],
     )
 
-    result = dict(changed=False)
+    result = dict(changed=False, member=member)
 
     # connect
     client = None
@@ -347,12 +361,12 @@ def main():
 
         # get replica set config
         rs_config = rs_get_config(client)
-        member['_id'] = rs_get_next_member_id(rs_config)
 
         if state == 'present':
             # check if given host is currently a member of replica set
             current_member = rs_get_member(rs_config, member['host'])
             if current_member is None:
+                member['_id'] = rs_get_next_member_id(rs_config)
                 rs_config = rs_add_member(rs_config, member)
                 rs_reconfigure(client, rs_config)
                 result['changed'] = True
@@ -362,6 +376,14 @@ def main():
             current_member = rs_get_member(rs_config, member['host'])
             if current_member:
                 rs_config = rs_remove_member(rs_config, member)
+                rs_reconfigure(client, rs_config)
+                result['changed'] = True
+        elif state == 'reconfigured':
+            # check if given host is currently a member of replica set
+            current_member = rs_get_member(rs_config, member['host'])
+            if current_member:
+                member['_id'] = current_member['_id']
+                rs_config = rs_replace_member(rs_config, member)
                 rs_reconfigure(client, rs_config)
                 result['changed'] = True
 
