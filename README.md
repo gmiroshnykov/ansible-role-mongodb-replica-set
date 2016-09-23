@@ -17,6 +17,16 @@ Usage
 # add an arbiter on custom port
 - mongodb_replica_set: member=arbiter.example.com:30000 arbiter_only=yes state=present
 
+# add tags to the replicate set member
+- mongodb_replica_set:
+    member secondary.example.com
+    state: present
+    tags:
+        use: worker
+
+# reconfigure a replica set member
+- mongodb_replica_set: member=secondary.example.com state=reconfigured priority=0
+
 # remove a replica set member
 - mongodb_replica_set: member=secondary.example.com state=absent
 
